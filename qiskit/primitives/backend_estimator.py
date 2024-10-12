@@ -60,7 +60,7 @@ def _run_circuits(
     metadata = []
     for circ in circuits:
         metadata.append(circ.metadata)
-        circ.metadata = {}
+        # circ.metadata = {}
     if isinstance(backend, BackendV1):
         max_circuits = getattr(backend.configuration(), "max_experiments", None)
     elif isinstance(backend, BackendV2):

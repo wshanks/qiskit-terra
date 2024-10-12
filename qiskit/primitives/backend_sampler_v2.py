@@ -17,11 +17,12 @@ from __future__ import annotations
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 from numpy.typing import NDArray
 
+from qiskit import QiskitError
 from qiskit.circuit import QuantumCircuit
 from qiskit.primitives.backend_estimator import _run_circuits
 from qiskit.primitives.base import BaseSamplerV2
@@ -52,6 +53,10 @@ class Options:
     """The seed to use in the simulator. If None, a random seed will be used.
     Default: None.
     """
+
+    noise_model: Any | None = None
+    meas_level: int | None = None
+    meas_return: str | None = None
 
 
 @dataclass
@@ -165,6 +170,7 @@ class BackendSamplerV2(BaseSamplerV2):
         for circuits in bound_circuits:
             flatten_circuits.extend(np.ravel(circuits).tolist())
 
+        # from pudb.remote import set_trace; set_trace(term_size=(200, 52))
         # run circuits
         results, _ = _run_circuits(
             flatten_circuits,
@@ -172,6 +178,9 @@ class BackendSamplerV2(BaseSamplerV2):
             memory=True,
             shots=shots,
             seed_simulator=self._options.seed_simulator,
+            noise_model=self._options.noise_model,
+            meas_return=self._options.meas_return,
+            meas_level=self._options.meas_level,
         )
         result_memory = _prepare_memory(results)
 
@@ -189,6 +198,8 @@ class BackendSamplerV2(BaseSamplerV2):
                     meas_info,
                     max_num_bytes,
                     pub.circuit.metadata,
+                    meas_level=self._options.meas_level,
+                    meas_return=self._options.meas_return,
                 )
             )
             start = end
@@ -203,22 +214,34 @@ class BackendSamplerV2(BaseSamplerV2):
         meas_info: list[_MeasureInfo],
         max_num_bytes: int,
         circuit_metadata: dict,
+        meas_level: int | None = None,
+        meas_return: str | None = None,
     ) -> SamplerPubResult:
         """Converts the memory data into an array of bit arrays with the shape of the pub."""
-        arrays = {
-            item.creg_name: np.zeros(shape + (shots, item.num_bytes), dtype=np.uint8)
-            for item in meas_info
-        }
-        memory_array = _memory_array(result_memory, max_num_bytes)
+        if meas_level == 2 or meas_level is None:
+            arrays = {
+                item.creg_name: np.zeros(shape + (shots, item.num_bytes), dtype=np.uint8)
+                for item in meas_info
+            }
+            memory_array = _memory_array(result_memory, max_num_bytes)
 
-        for samples, index in zip(memory_array, np.ndindex(*shape)):
-            for item in meas_info:
-                ary = _samples_to_packed_array(samples, item.num_bits, item.start)
-                arrays[item.creg_name][index] = ary
+            for samples, index in zip(memory_array, np.ndindex(*shape)):
+                for item in meas_info:
+                    ary = _samples_to_packed_array(samples, item.num_bits, item.start)
+                    arrays[item.creg_name][index] = ary
 
-        meas = {
-            item.creg_name: BitArray(arrays[item.creg_name], item.num_bits) for item in meas_info
-        }
+            meas = {
+                item.creg_name: BitArray(arrays[item.creg_name], item.num_bits) for item in meas_info
+            }
+        elif meas_level == 1:
+            # from pudb.remote import set_trace; set_trace(term_size=(200, 50))
+            raw = np.array(result_memory)
+            cplx = raw[..., 0] + 1j * raw[..., 1]
+            meas = {
+                item.creg_name: cplx for item in meas_info
+            }
+        else:
+            raise QiskitError(f"Unsupported meas_level: {meas_level}")
         return SamplerPubResult(
             DataBin(**meas, shape=shape),
             metadata={"shots": shots, "circuit_metadata": circuit_metadata},
